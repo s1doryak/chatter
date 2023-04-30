@@ -1,0 +1,875 @@
+<!doctype html>
+<html class="dark">
+
+<head>
+  <title>Обнял, связь!</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0f172a">
+  <script src="https://cdn.tailwindcss.com?plugins=forms,typography,aspect-ratio,line-clamp"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      // h-screen: var(--h-screen, 100vh)
+    }
+  </script>
+  <script src="https://unpkg.com/babel-standalone@6/babel.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/openpgp@5.5.0/dist/openpgp.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/uuid@8.3.2/dist/umd/uuidv4.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/moment@2.29.4/min/moment.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-copy-to-clipboard@5.1.0/build/react-copy-to-clipboard.min.js"
+    crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/marked@4.2.4/marked.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/html-react-parser@3.0.4/dist/html-react-parser.min.js"
+    crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/localforage@1.10.0/dist/localforage.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2" crossorigin="anonymous"></script>
+</head>
+
+<body class="subpixel-antialiased bg-slate-50 dark:bg-slate-900">
+
+  <div id="chat"></div>
+
+  <script type="text/babel">
+
+    function Container({ children }) {
+      return <div className="relative flex flex-col m-auto max-w-screen-sm min-h-screen w-full">
+        {children}
+      </div>
+    }
+
+    function Users({ uuid, room, users, setUsers }) {
+
+      const [loading, setLoading] = React.useState(true)
+
+      const fetchUsers = async (setState, setLoading) => {
+        const { data, error } = await client.from('users')
+          .select('id, name, bio, avatar_url, ts')
+          .order('ts', { ascending: false })
+
+        if (setLoading) {
+          setLoading(false)
+        }
+
+        if (error) {
+          return error
+        }
+
+        if (setState) {
+          setState(data)
+        }
+      }
+
+      const subscribeUsers = async (pushState, filterState, updateState) => {
+
+        const subscription = await client.channel('public:users')
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'users' }, ({ new: user }) => {
+            pushState(user)
+          })
+          .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'users' }, ({ old: deleted }) => {
+            filterState(deleted)
+          })
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'users' }, ({ old: modified, new: user }) => {
+            updateState(modified, user)
+          })
+          .subscribe()
+
+        return subscription
+      }
+
+      //const [users, setUsers] = React.useState([])
+
+      React.useEffect(() => {
+
+        const subscription = subscribeUsers(
+          (user) => setUsers(
+            (users) => [user, ...users]
+          ),
+          (deleted) => setUsers(
+            (users) => users.filter(u => u.id !== deleted.id)
+          ),
+          (updated, user) => setUsers(
+            (users) => users.map(u => u.id !== updated.id ? u : user)
+          )
+        )
+
+        fetchUsers(
+          (users) => setUsers(users),
+          (loading) => setLoading(loading)
+        )
+
+        return () => subscription.unsubscribe()
+
+      }, [])
+
+      if (loading) return <div className="flex-1 overflow-auto overflow-x-hidden p-4 pt-12 pb-24 text-center">
+        <div className="animate-pulse">
+          <div className="relative cursor-default inline-block w-24 h-8 m-2 p-1 px-3 rounded-full bg-slate-300/20 dark:bg-slate-700/20">
+            <span className="absolute -right-0.5 -bottom-0.5 w-3 h-3 bg-emerald-300/20 rounded-full"></span>
+          </div>
+          <div className="relative cursor-default inline-block w-36 h-8 m-2 p-1 px-3 rounded-full bg-slate-300/20 dark:bg-slate-700/20"></div>
+          <div className="relative cursor-default inline-block w-40 h-8 m-2 p-1 px-3 rounded-full bg-slate-300/20 dark:bg-slate-700/20">
+            <span className="absolute -right-0.5 -bottom-0.5 w-3 h-3 bg-emerald-300/20 rounded-full"></span>
+          </div>
+          <div className="relative cursor-default inline-block w-28 h-8 m-2 p-1 px-3 rounded-full bg-slate-300/20 dark:bg-slate-700/20">
+            <span className="absolute -right-0.5 -bottom-0.5 w-3 h-3 bg-emerald-300/20 rounded-full"></span>
+          </div>
+          <div className="relative cursor-default block w-32 h-8 m-4 mx-auto p-1 px-3 rounded-full bg-gradient-to-r from-red-200/30 via-red-300/30 to-yellow-200/30"></div>
+        </div>
+      </div>
+
+      if (users.length === 0) return <div className="flex-1 p-4 pt-12 pb-24">
+        <div className="w-max mx-auto m-4 p-0.5 px-1.5 text-slate-500">Никого. Да святится имя Твое.</div>
+      </div>
+
+      return <div className="flex-1 overflow-auto overflow-x-hidden p-4 pt-12 pb-24 text-center">
+        <div className="w-max mx-auto m-4 p-0.5 px-1.5 text-slate-500">На связи:</div>
+        {users.map((user) =>
+          room && user.id === room.priest.id
+            ? <div key={user.id} className="relative cursor-default block w-max m-4 mx-auto p-1 px-3 rounded-full font-medium bg-gradient-to-r from-red-200 via-red-300 to-yellow-200">
+              {user.name}
+              <span className="!hidden absolute -right-0.5 -bottom-0.5 w-3 h-3 bg-emerald-300 rounded-full"></span>
+            </div>
+            : <div key={user.id} className="relative cursor-default inline-block w-max m-2 p-1 px-3 rounded-full bg-slate-300 dark:bg-slate-700 dark:text-white">
+              {user.name}
+              <span className="!hidden absolute -right-0.5 -bottom-0.5 w-3 h-3 bg-emerald-300 rounded-full"></span>
+            </div>
+        )}
+        <div className="w-max mx-auto m-4 p-0.5 px-1.5 text-slate-500">Ты с нами?</div>
+      </div>
+    }
+
+    function Messages({ uuid, room, users, messages, setMessages, topMessage, setTopMessage }) {
+
+      const [loading, setLoading] = React.useState(true)
+
+      const fetchCount = async () => {
+
+        const { count, error } = await client.from('messages')
+          .select('*', { count: 'exact' })
+          .eq('room_id', room.id)
+          .gt('ts', topMessage.ts)
+          .order('ts', { ascending: false })
+
+        if (error) {
+          return error
+        }
+
+        console.log('Новых сообщений:', count)
+      }
+
+      const fetchMessages = async (updateState, updateTop, setLoading, limit = 30) => {
+
+        const { data, error } = await client.from('messages')
+          .select('id, content, username, user_id, user:user_id(id, name, bio, avatar_url), ts')
+          .eq('room_id', room.id)
+          .gt('ts', topMessage.ts)
+          .order('ts', { ascending: false })
+          .limit(limit) //TODO: Возможность принять предыдущие сообщения
+
+        const [top,] = [...data, topMessage]
+
+        if (setLoading) {
+          setLoading(false)
+        }
+
+        if (error) {
+          return error
+        }
+
+        if (updateState) {
+          updateState(data)
+        }
+
+        if (updateTop) {
+          updateTop(top)
+        }
+      }
+
+      const fetchMessage = async (id) => {
+        const { data } = await client.from('messages')
+          .select('id, content, username, user_id, user:user_id(id, name, bio, avatar_url), ts')
+          .eq('room_id', room.id)
+          .eq('id', id)
+          .single()
+
+        return data
+      }
+
+      const deleteMessage = async (id) => {
+        const { error } = await client
+          .from('messages')
+          .delete()
+          .eq('room_id', room.id)
+          .eq('id', id)
+      }
+
+      const subscribeMessages = async (pushState, filterState, updateState /*, setTopMessage */) => {
+
+        const subscription = await client.channel('public:messages')
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: 'room_id=eq.' + room.id }, async ({ new: message }) => {
+            //TODO: Проверка на существование сообщения или рефакторинг
+            if (isMine(message)) {
+              updateState(
+                message, await fetchMessage(message.id)
+              )
+            } else {
+              pushState(
+                await fetchMessage(message.id)
+              )
+            }
+
+          })
+          .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: 'room_id=eq.' + room.id }, async ({ old: message }) => {
+            filterState(message)
+          })
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: 'room_id=eq.' + room.id }, async ({ old: modified, new: message }) => {
+            updateState(
+              modified, await fetchMessage(message.id)
+            )
+          })
+          .subscribe()
+      }
+
+      React.useEffect(() => {
+
+        fetchMessages(
+          (fetched) => setMessages(
+            (messages) => [...fetched, ...messages]
+          ),
+          (message) => setTopMessage(message),
+          (loading) => setLoading(loading),
+        )
+
+        // subscribeMessages(
+        //   (message) => setMessages(
+        //     (messages) => [message, ...messages]
+        //   ),
+        //   (deleted) => setMessages(
+        //     (messages) => messages.filter((message) => message.id !== deleted.id)
+        //   ),
+        //   (updated, message) => setMessages(
+        //     (messages) => messages.map(u => u.id !== updated.id ? u : message)
+        //   )
+        // )
+
+        const checkUpdates = () => {
+
+          if (document.hidden === true) {
+            return
+          }
+
+          fetchCount()
+        }
+
+        document.addEventListener('visibilitychange', checkUpdates)
+
+        return () => {
+          document.removeEventListener('visibilitychange', checkUpdates)
+        }
+      }, [topMessage])
+
+      const emojiMessage = /^(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])+$/
+      const shortMessage = /^(\W|\d|\w){0,7}$/
+      const debitMessage = /^(\d{4}\s*){4}$/
+      const imageMessage = /^https:\/\/[^\s]+\.(jpg|jpeg|jfif|png|gif|bmp|webp)(\?[^\s]+)?$/i
+      const audioMessage = /^https:\/\/[^\s]+\.(mp3|m4a|oga|wav)(\?[^\s]+)?$/i
+      const videoMessage = /^https:\/\/[^\s]+\.(mp4|ogg)(\?[^\s]+)?$/i
+      const embedMessage = /^https:\/\/(www\.youtube\.com\/watch\?v=)([^\s]+)$/i
+      const proseMessage = /\n\n/gmui
+      const pgpMessage = /-----(BEGIN|END) PGP ([\sA-Z]+)-----/gmui
+
+      const isMine = (message) => message.user === null || message.user_id === uuid
+
+      const isPGPMessage = (content) => {
+        return pgpMessage.test(content)
+      }
+
+      const isProseMessage = (content) => {
+        return proseMessage.test(content)
+      }
+
+      const isImageMessage = (content) => {
+        return imageMessage.test(content)
+      }
+
+      const isAudioMessage = (content) => {
+        return audioMessage.test(content)
+      }
+
+      const isVideoMessage = (content) => {
+        return videoMessage.test(content)
+      }
+
+      const isEmbedMessage = (content) => {
+        return embedMessage.test(content)
+      }
+
+      const processEmbedMessage = (content, group = 2) => {
+
+        const src = 'https://www.youtube.com/embed/' + content.match(embedMessage)
+          .at(group)
+
+        return <div className="aspect-w-16 aspect-h-9">
+          <iframe src={src} frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen></iframe>
+        </div>
+      }
+
+      const processProseMessage = (content, formatter = marked) => {
+
+        const html = formatter.parse(content)
+
+        return HTMLReactParser(html)
+      }
+
+      const processPGPMessage = (content) => {
+
+        const cropped = content.replaceAll(pgpMessage, '').trim()
+
+        const decryptMessage = async () => {
+
+          const password = prompt('Введите пароль')
+
+          const { data: decrypted } = await openpgp.decrypt({
+            message: await openpgp.readMessage({ armoredMessage: content }),
+            passwords: [password],
+          })
+
+          alert(decrypted)
+        }
+
+        return <div onClick={() => decryptMessage()} className="overflow-hidden text-ellipsis blur-[2px]">
+          {cropped}
+        </div>
+      }
+
+      const processMessage = (content) => {
+
+        const href = /(https:\/\/[^\s]+)/i
+
+        const html = content.replace(href, '<a target="_blank" href="$&">$&</a>')
+
+        return HTMLReactParser(html)
+      }
+
+      const buildClasses = (message) => {
+
+        const classNames = ['cursor-pointer max-w-xs md:max-w-md']
+
+        switch (true) {
+          case isPGPMessage(message.content):
+            classNames.push('p-3', 'px-4', isMine(message) ? 'mb-2' : 'mb-6', 'rounded-lg', 'text-white', 'bg-slate-200', 'dark:bg-slate-800 dark:text-white/90')
+            break;
+          case isImageMessage(message.content):
+            classNames.push('p-0', isMine(message) ? 'mb-2' : 'mb-6', 'rounded-lg', 'overflow-hidden')
+            break
+          case isVideoMessage(message.content):
+            classNames.push('p-0', isMine(message) ? 'mb-2' : 'mb-6', 'bg-transparent', 'rounded-lg', 'overflow-hidden')
+            break
+          case isAudioMessage(message.content):
+            classNames.push('p-0', isMine(message) ? 'mb-2' : 'mb-6', 'bg-transparent')
+            break
+          case isEmbedMessage(message.content):
+            classNames.push('p-0', isMine(message) ? 'mb-2' : 'mb-6', 'bg-slate-200 dark:bg-slate-800', 'rounded-lg', 'overflow-hidden', 'w-full')
+            break
+          case emojiMessage.test(message.content):
+            classNames.push('p-1', isMine(message) ? 'mb-2' : 'mb-8', 'text-4xl')
+            break
+          case shortMessage.test(message.content):
+            classNames.push('p-1', isMine(message) ? 'mb-2' : 'mb-8', 'text-2xl', 'font-medium', 'dark:text-white')
+            break
+          case debitMessage.test(message.content):
+            classNames.push('p-2', 'px-1', isMine(message) ? 'mb-2' : 'mb-8', 'text-lg', 'font-mono', 'font-semibold', 'after:content-[\'💳\']', 'after:mx-2', 'dark:text-white')
+            break
+          default:
+
+            if (isProseMessage(message.content)) {
+              classNames.push('prose', 'prose-sm', 'prose-img:rounded-md', 'prose-img:m-0', 'prose-blockquote:[quotes:none]', '[&>p:last-of-type]:mb-1', 'dark:prose-invert')
+
+              if (isMine(message)) {
+                classNames.push('prose-a:text-white')
+              }
+            }
+
+            if (isMine(message)) {
+              classNames.push('bg-blue-500', 'text-white', isProseMessage(message.content) ? 'text-left' : 'text-right')
+            } else {
+              classNames.push('bg-slate-200', 'dark:bg-slate-800 dark:text-white/90')
+            }
+
+            classNames.push('p-2', 'px-3', isMine(message) ? 'mb-2' : 'mb-6', 'rounded-lg', 'text-ellipsis overflow-hidden')
+
+            break
+        }
+
+        return classNames.join(' ')
+      }
+
+      const renderMessage = (message) => {
+
+        switch (true) {
+          case isPGPMessage(message.content):
+            return processPGPMessage(message.content)
+          case isImageMessage(message.content):
+            return <img src={message.content} />
+          case isVideoMessage(message.content):
+            return <video controls src={message.content}></video>
+          case isAudioMessage(message.content):
+            return <audio controls src={message.content}></audio>
+          case isEmbedMessage(message.content):
+            return processEmbedMessage(message.content)
+          case isProseMessage(message.content):
+            return processProseMessage(message.content)
+          default:
+            return processMessage(message.content)
+        }
+      }
+
+      const renderDeleteButton = (message) => {
+        return <button disabled={!message.ts} onClick={() => deleteMessage(message.id)} className="p-2 mb-2 text-slate-400 hover:text-slate-500 disabled:opacity-10">
+          <svg className="m-auto h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      }
+
+      const renderUser = (message) => {
+
+        let classNames = 'absolute bottom-3 left-3 cursor-default w-max text-xs p-0.5 px-1.5 -mx-1 rounded-full font-medium text-slate-900 '
+
+        if (message.user) {
+          classNames = classNames.concat(message.user.id === room.priest.id
+            ? 'bg-gradient-to-r from-red-200 via-red-300 to-yellow-200'
+            : 'bg-slate-300 dark:bg-slate-700 dark:text-white')
+        } else {
+          classNames = classNames.concat('bg-slate-300 dark:bg-slate-700 dark:text-white')
+        }
+
+        return <div className={classNames}>
+          {message.user ? message.user.name : message.username}
+          <span className="absolute -right-0.5 -bottom-0.5 w-2 h-2 bg-emerald-300 rounded-full"></span>
+        </div>
+      }
+
+      const renderTime = (message) => {
+        return <div className="p-2 text-xs text-slate-400">{moment(message.ts).format('HH:mm')}</div>
+      }
+
+      if (loading) return <div className="flex flex-col-reverse flex-1 overflow-hidden p-4 pt-12 pb-24">
+        <div className="animate-pulse">
+          <div className="bg-slate-200/20 rounded-lg w-32 h-10 mb-8 clear-both"></div>
+          <div className="bg-blue-600/20 rounded-lg w-32 h-10 mb-8 clear-both float-right"></div>
+          <div className="bg-slate-200/20 rounded-lg w-48 h-10 mb-8 clear-both"></div>
+          <div className="bg-slate-200/20 rounded-lg w-64 h-10 mb-8 clear-both"></div>
+          <div className="bg-slate-200/20 rounded-lg w-48 h-20 mb-8 clear-both"></div>
+          <div className="bg-blue-600/20 rounded-lg w-48 h-10 mb-8 clear-both float-right"></div>
+        </div>
+      </div>
+
+      if (messages.length === 0) return <ul className="flex-1 p-4 pt-12 pb-24">
+        <li className="w-max mx-auto m-4 p-0.5 px-1.5 text-slate-500">Пока тишина. Начинай ты.</li>
+      </ul>
+
+      return <ul className="flex flex-col-reverse flex-1 overflow-auto overflow-x-hidden p-4 pt-12 pb-24">
+        {messages.map(
+          (message) => isMine(message)
+            ? <li key={message.id} className="flex flex-row-reverse">
+              <div className={buildClasses(message)}>{renderMessage(message)}</div>
+              {renderDeleteButton(message)}
+              <div className="flex-1"></div>
+            </li>
+            : <li key={message.id} className="relative flex flex-row">
+              <div className={buildClasses(message, uuid)}>{renderMessage(message)}</div>
+              {renderUser(message)}
+              {renderTime(message)}
+              <div className="flex-1"></div>
+            </li>
+        )}
+      </ul>
+    }
+
+    function Presence({ room, uuid }) {
+
+      const [message, setMessage] = React.useState()
+      const [hidden, setHidden] = React.useState(false)
+
+      React.useEffect(() => {
+
+        return () => { }
+
+      }, [])
+
+      return <div className="absolute cursor-default ease-in-out duration-150 bottom-20 left-0 right-0 text-sm text-center text-slate-500"
+        style={{ opacity: hidden ? 0 : 1 }}>
+        {message}
+      </div>
+    }
+
+    function Submit({ uuid, room, setMessages }) {
+
+      const [content, setContent] = React.useState()
+      const resetForm = () => setContent('')
+
+      const submitMessage = async (pushState, filterState, updateState) => {
+
+        const message = { content, room_id: room.id, user_id: uuid, id: uuidv4() }
+
+        if (pushState) {
+          pushState(message)
+        }
+
+        const { data, error } = await client.from('messages')
+          .insert(message)
+          .select()
+          .single()
+
+        if (error) {
+
+          switch (error.code) {
+            // user_id bad value
+            case '23502':
+            case '23503':
+              // signOut()
+              console.log(error.message)
+            default:
+              if (filterState) {
+                filterState(message)
+              }
+              break;
+          }
+        }
+
+        //TODO: filterState
+        if (updateState) {
+          updateState(message, data)
+        }
+
+      }
+
+      const handleChange = (e, limit = 5, offset = 1) => {
+
+        const multiline = e.target.value.match(/\n/gui)
+
+        if (multiline) {
+          e.target.rows = multiline.length > limit ? limit : multiline.length + offset
+        } else {
+          e.target.rows = offset
+        }
+
+        setContent(e.target.value)
+      }
+
+      const handleSubmit = async (e) => {
+
+        e.preventDefault()
+
+        submitMessage(
+          (message) => setMessages(
+            (messages) => [message, ...messages]
+          ),
+          (deleted) => setMessages(
+            (messages) => messages.filter((message) => message.id !== deleted.id)
+          ),
+          (updated, message) => setMessages(
+            (messages) => messages.map(u => u.id !== updated.id ? u : message)
+          )
+        )
+        resetForm()
+      }
+
+      const handleCtrlEnter = async (e) => {
+        if (e.key === 'Enter' && e.ctrlKey) {
+          //handleSubmit(e)
+        }
+      }
+
+      return <div className="absolute bottom-0 left-0 right-0 p-2">
+        <form className="w-full h-max p-3 flex justify-center items-end rounded-2xl backdrop-blur-sm bg-slate-300/50 dark:bg-slate-700/50"
+          onSubmit={handleSubmit}>
+          <textarea rows="1" className="bg-white rounded-lg p-2 mr-4 w-full border-none resize-none focus:outline-none focus:ring focus:ring-slate-300 dark:focus:ring-slate-600"
+            placeholder="Есть соль и пара яиц?"
+            value={content}
+            onChange={handleChange}>
+          </textarea>
+          <button className="bg-blue-500 p-2 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-6 h-6">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"></path>
+            </svg>
+          </button>
+        </form>
+      </div>
+
+      return
+    }
+
+    function SignUp({ signUp }) {
+
+      const name = React.useRef(null)
+
+      const handleSubmit = (e) => {
+        e.preventDefault()
+        signUp(name.current.value)
+      }
+
+      return <div className="absolute bottom-0 left-0 right-0 p-2">
+        <form className="w-full h-max p-3 flex justify-center items-end rounded-2xl backdrop-blur-sm bg-slate-300/50 dark:bg-slate-700/50"
+          onSubmit={handleSubmit}>
+          <input className="bg-white rounded-lg p-2 mr-4 w-full border-none resize-none focus:outline-none focus:ring focus:ring-slate-300 dark:focus:ring-slate-600"
+            placeholder="Кто ты?"
+            ref={name}>
+          </input>
+          <button className="bg-blue-500 p-2 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-6 h-6">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"></path>
+            </svg>
+          </button>
+        </form>
+      </div>
+    }
+
+    function SignOut({ theme, setTheme, mode, setMode, signOut }) {
+
+      return <div className="absolute z-10 top-0 left-0 right-0 p-2 text-center">
+        <button
+          className="p-2 mx-2 rounded-full text-sm text-black/50 hover:text-black/80 dark:text-white/50 dark:hover:text-white/80 backdrop-blur-sm bg-slate-300/50 dark:bg-slate-700/50"
+          onClick={() => setMode(mode === 'silent' ? 'notifications' : 'silent')}>
+          {mode === 'silent'
+            ? <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="inline w-5 h-5 -mt-0.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0M3.124 7.5A8.969 8.969 0 015.292 3m13.416 0a8.969 8.969 0 012.168 4.5" />
+            </svg>
+            : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="inline w-5 h-5 -mt-0.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.143 17.082a24.248 24.248 0 003.844.148m-3.844-.148a23.856 23.856 0 01-5.455-1.31 8.964 8.964 0 002.3-5.542m3.155 6.852a3 3 0 005.667 1.97m1.965-2.277L21 21m-4.225-4.225a23.81 23.81 0 003.536-1.003A8.967 8.967 0 0118 9.75V9A6 6 0 006.53 6.53m10.245 10.245L6.53 6.53M3 3l3.53 3.53" />
+            </svg>
+          }
+        </button>
+        <button
+          className="p-2 mx-2 rounded-full text-sm text-black/50 hover:text-black/80 dark:text-white/50 dark:hover:text-white/80 backdrop-blur-sm bg-slate-300/50 dark:bg-slate-700/50"
+          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+          {theme === 'dark'
+            ? <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="inline w-5 h-5 -mt-0.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
+            </svg>
+            : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="inline w-5 h-5 -mt-0.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
+            </svg>
+
+          }
+        </button>
+        <button
+          className="p-2 px-4 mx-2 rounded-full text-sm text-black/50 hover:text-black/80 dark:text-white/50 dark:hover:text-white/80 backdrop-blur-sm bg-slate-300/50 dark:bg-slate-700/50"
+          onClick={signOut}>
+          Выйти
+        </button>
+      </div>
+    }
+
+    function Room({ room, setRoom }) {
+
+      //const [room, setRoom] = React.useState()
+      const [loading, setLoading] = React.useState(true)
+
+      const fetchRoom = async (setState, setLoading) => {
+        const { data, error } = await client.from('rooms')
+          .select('id, name, description, priest:priest(id, name, bio, avatar_url), ts')
+          .eq('id', room.id)
+          .single()
+
+        if (setLoading) {
+          setLoading(false)
+        }
+
+        if (error) {
+          return error
+        }
+
+        if (setState) {
+          setState(data)
+        }
+      }
+
+      const renderRoom = (room, parser = marked) => {
+
+        const html = parser.parse(room.description)
+
+        return HTMLReactParser(html)
+      }
+
+      const renderMeta = (room) => {
+        return <p>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="inline w-5 h-5 -mt-0.5 mr-1">
+            <path strokeLinecap="round" d="M16.5 12a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zm0 0c0 1.657 1.007 3 2.25 3S21 13.657 21 12a9 9 0 10-2.636 6.364M16.5 12V8.25" />
+          </svg>
+
+          {room.name}
+
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="inline w-5 h-5 -mt-0.5 mr-1 ml-4">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          {moment(room.ts).format('DD.MM.YYYY HH:mm')}
+        </p>
+      }
+
+      React.useEffect(() => {
+
+        fetchRoom(
+          (room) => setRoom(room),
+          (loading) => setLoading(loading)
+        )
+
+        return () => setLoading(true)
+      }, [])
+
+      if (loading) {
+        return <div className="w-full m-auto p-8 bg-blue-600">
+          <div className="animate-pulse">
+            <div className="bg-slate-200/20 rounded-lg w-full h-10 mb-8"></div>
+            <div className="bg-slate-200/20 rounded-lg w-full h-7  mb-3"></div>
+            <div className="bg-slate-200/20 rounded-lg w-full h-7  mb-3"></div>
+            <div className="bg-slate-200/20 rounded-lg w-48   h-7  mb-3"></div>
+            <div className="bg-slate-200/20 rounded-lg w-full h-7  mt-8"></div>
+          </div>
+        </div>
+      }
+
+      return <div className="w-full m-auto p-8 bg-blue-600 prose prose-invert prose-img:rounded-md prose-a:no-underline prose-blockquote:[quotes:none]">
+        {renderRoom(room)}
+        {renderMeta(room)}
+      </div>
+
+    }
+
+    function Chat({ client, id, children }) {
+
+      // useChat(id)
+      const [room, setRoom] = React.useState({ id, priest: {} })
+      const [users, setUsers] = React.useState([])
+      const [messages, setMessages] = React.useState([])
+      const [topMessage, setTopMessage] = React.useState({ ts: '2022-11-23 06:38:00.000000+00' })
+
+      // useSession
+      const [uuid, setUuid] = React.useState(
+        localStorage.getItem('uuid')
+      )
+
+      const [theme, setTheme] = React.useState(
+        localStorage.getItem('theme')
+      )
+
+      // const [mode, setMode] = React.useState(
+      //   localStorage.getItem('mode')
+      // )
+
+      React.useEffect(() => {
+
+        if (uuid) {
+          localStorage.setItem('uuid', uuid)
+        } else {
+          localStorage.clear()
+        }
+
+        //TODO: signIn(uuid)
+
+        if (theme) {
+          localStorage.setItem('theme', theme)
+        } else {
+          localStorage.setItem('theme', 'dark')
+        }
+
+        document.documentElement.className = theme
+
+      }, [uuid, theme])
+
+      const signIn = async (uuid) => {
+
+        const { data, error } = await client.from('users')
+          .select()
+          .eq('id', uuid)
+          .single()
+
+        if (error) {
+          signOut()
+        }
+
+        if (data) {
+          setUuid(data.id)
+        }
+      }
+
+      const signUp = async (name) => {
+        const { data, error } = await client.from('users')
+          .insert({ name })
+          .select()
+          .single()
+
+        if (error) {
+          signOut()
+        }
+
+        if (data) {
+          setUuid(data.id)
+        }
+      }
+
+      const signOut = () => {
+        setUuid(null)
+      }
+
+      return <Container>
+        <Messages uuid={uuid} room={room} users={users} messages={messages} setMessages={setMessages} topMessage={topMessage} setTopMessage={setTopMessage} />
+        <Submit uuid={uuid} room={room} setMessages={setMessages} />
+      </Container>
+
+      return <Container>
+        <Room room={room} setRoom={setRoom} />
+        <Users uuid={uuid} room={room} users={users} setUsers={setUsers} />
+        <Messages uuid={uuid} room={room} users={users} messages={messages} setMessages={setMessages} topMessage={topMessage} setTopMessage={setTopMessage} />
+        <Submit uuid={uuid} room={room} setMessages={setMessages} />
+      </Container>
+
+      return uuid
+        ? <Container>
+          <Room id={room} />
+          <SignOut mode={mode} setMode={setMode} theme={theme} setTheme={setTheme} signOut={signOut} />
+          <Messages room={room} uuid={uuid} />
+          <Presence room={room} uuid={uuid} />
+          <Submit room={room} uuid={uuid} />
+        </Container>
+        : <Container>
+          <Room id={room} />
+          <Users />
+          <SignUp signUp={signUp} />
+        </Container>
+        ;
+    }
+
+    const client = supabase.createClient(
+      'https://iqpokkogrxcidfvvouaz.supabase.co',
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxcG9ra29ncnhjaWRmdnZvdWF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE2Njk1NjUyMDksImV4cCI6MTk4NTE0MTIwOX0.CqEo93msN9MeaCFrCVFtO8AorACl7Cm1rk3rTaGUgbA'
+    )
+
+    //const room = '2f47c09b-57f5-4494-adfa-2bec0aa391a6'
+
+    ReactDOM.createRoot(
+      document.getElementById('chat')
+    ).render(<Chat client={client} id="2f47c09b-57f5-4494-adfa-2bec0aa391a6" />)
+
+    window.addEventListener('resize', () => {
+      document.documentElement.style.setProperty('--h-screen', `${window.innerHeight}px`)
+    })
+
+    document.documentElement.style.setProperty('--h-screen', `${window.innerHeight}px`)
+
+    if (Notification.permission !== 'denied') {
+      //TODO: Notification.requestPermission()
+    }
+
+    if ('serviceWorker' in navigator) {
+      //TODO: navigator.serviceWorker.register('/sw.js')
+    }
+
+  </script>
+</body>
+
+<html>
